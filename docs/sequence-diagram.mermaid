@@ -1,0 +1,187 @@
+---
+title: Hermes Chat — 时序图 (Sequence Diagrams)
+---
+
+%% ============================================
+%% 4.1 消息发送完整链路 (Hermes → 后端 → 前端)
+%% ============================================
+
+sequenceDiagram
+    participant H as Hermes Agent
+    participant HC as HermesConnector
+    participant MR as MessageRouter
+    participant DB as Database
+    participant WM as WebSocketManager
+    participant FE as Frontend (React)
+    participant CS as ChatStore
+    participant UI as MessageRenderer
+
+    H->>HC: 推送消息 (WebSocket/SSH)
+    HC->>HC: 解析原始消息
+    HC->>MR: routeFromHermes(botId, rawMsg)
+    MR->>MR: validateMessage(msg)
+    
+    alt 消息无效
+        MR-->>HC: 丢弃 + 日志告警
+    else 消息有效
+        MR->>MR: transformMessage(rawMsg)
+        MR->>DB: persistMessage(msg)
+        DB-->>MR: 保存成功
+        MR->>WM: broadcastToChat(chatId, 'message:new', msg)
+        WM->>FE: Socket.IO 'message:new' 事件
+        FE->>CS: addMessage(msg)
+        CS->>CS: 更新 messages[] & chats[]
+        CS->>UI: 触发重渲染
+        UI->>UI: 按 msg.type 分发渲染组件
+        
+        alt 消息类型 = GAME
+            UI->>UI: 渲染 GameMessage → iframe sandbox
+        else 消息类型 = PROGRESS
+            UI->>UI: 渲染 ProgressMessage → 进度条卡片
+        else 消息类型 = UI_MOD
+            UI->>UI: 渲染 SystemMessage + 触发 UIStore.applyUIMod()
+        else
+            UI->>UI: 渲染 TextMessage / MarkdownMessage
+        end
+    end
+
+
+%% ============================================
+%% 4.2 用户发送消息链路 (前端 → 后端 → Hermes)
+%% ============================================
+
+sequenceDiagram
+    participant UI as MessageInput
+    participant CS as ChatStore
+    participant SS as SocketService
+    participant WM as WebSocketManager
+    participant MR as MessageRouter
+    participant DB as Database
+    participant HC as HermesConnector
+    participant H as Hermes Agent
+
+    UI->>CS: sendMessage(text, type)
+    CS->>CS: 构建 Message 对象 (status=SENDING)
+    CS->>SS: emitMessage(msg)
+    SS->>WM: Socket.IO 'message:send' 事件
+    WM->>MR: routeFromFrontend(msg)
+    MR->>MR: validateMessage(msg)
+    MR->>DB: persistMessage(msg)
+    
+    MR->>HC: sendMessage(botId, msg)
+    
+    alt SSH 通道可用
+        HC->>H: 通过 SSH 隧道发送
+    else 使用 WebSocket
+        HC->>H: 通过 WebSocket 发送
+    end
+    
+    H-->>HC: 确认收讫
+    HC-->>MR: 确认
+    MR->>WM: broadcastToChat(chatId, 'message:ack', {id, status:DELIVERED})
+    WM->>SS: 'message:ack'
+    SS->>CS: updateMessage(id, {status: DELIVERED})
+
+
+%% ============================================
+%% 4.3 Bot 连接建立流程
+%% ============================================
+
+sequenceDiagram
+    participant FE as Frontend Settings
+    participant API as API Routes
+    participant HC as HermesConnector
+    participant SSH as SSHTunnel
+    participant H as Hermes Agent
+    participant WM as WebSocketManager
+
+    FE->>API: POST /api/bots/connect {address, port, token}
+    API->>API: validateInput(zod)
+    
+    par 建立 SSH 隧道
+        API->>SSH: establish({host, port, key})
+        SSH->>H: SSH 连接 & 认证
+        H-->>SSH: 隧道建立成功
+        SSH-->>API: SSH 就绪
+    and 建立 WebSocket
+        API->>HC: connect(botId, address, port, token)
+        HC->>H: WebSocket 握手 (含认证 token)
+        H-->>HC: 连接成功 + Bot 元信息
+    end
+    
+    HC-->>API: Bot 连接成功
+    API->>WM: sendToUser(userId, 'bot:status', {botId, status:ONLINE})
+    WM->>FE: 'bot:status' 事件
+    FE->>FE: 更新 Bot 状态为 ONLINE
+    
+    loop 心跳检测 (每 30s)
+        HC->>H: ping
+        H-->>HC: pong
+        HC->>HC: 更新 lastHeartbeat
+    end
+
+
+%% ============================================
+%% 4.4 HTML5 游戏生命周期
+%% ============================================
+
+sequenceDiagram
+    participant Bot as Hermes Bot
+    participant HC as HermesConnector
+    participant WM as WebSocketManager
+    participant FE as Frontend
+    participant GB as GameBridge
+    participant IF as iframe (H5 Game)
+
+    Bot->>HC: 推送游戏消息 {type: GAME, gameUrl, metadata}
+    HC->>WM: broadcastToChat
+    WM->>FE: 'message:new' (type=GAME)
+    FE->>FE: MessageRenderer 分发到 GameMessage
+    FE->>GB: mount(container, url)
+    GB->>GB: validateUrl(url) 白名单校验
+    
+    alt URL 不在白名单
+        GB->>FE: 显示 "游戏来源不受信任" 错误
+    else URL 验证通过
+        GB->>IF: 创建 iframe sandbox="allow-scripts allow-same-origin"
+        IF->>IF: 加载并运行 H5 游戏
+        
+        loop 游戏进行中
+            IF->>GB: postMessage({type: 'game:event', data})
+            GB->>FE: 转发游戏事件 (得分/进度等)
+        end
+        
+        IF->>GB: postMessage({type: 'game:result', score, data})
+        GB->>FE: onGameResult(result)
+        FE->>FE: SocketService.emit('game:result', result)
+        FE->>Bot: 结果通过消息通道回传
+        GB->>GB: destroy() 清理 iframe
+    end
+
+
+%% ============================================
+%% 4.5 Bot 动态换肤流程
+%% ============================================
+
+sequenceDiagram
+    participant Bot as Hermes Bot
+    participant WM as WebSocketManager
+    participant FE as Frontend
+    participant UIS as UIStore
+    participant Theme as MUI ThemeProvider
+
+    Bot->>WM: 推送 UI 修改消息 {type: UI_MOD, uiMod: {type: SET_THEME, payload: {theme: "dark", primaryColor: "#ff6b6b"}}}
+    WM->>FE: 'message:new' (type=UI_MOD)
+    FE->>UIS: applyUIMod(msg.metadata.uiMod)
+    
+    UIS->>UIS: 白名单校验 (type 是否在允许列表中)
+    
+    alt 指令不合法
+        UIS->>FE: 忽略 + 日志记录
+    else 指令合法
+        UIS->>UIS: setTheme("dark")
+        UIS->>UIS: setPrimaryColor("#ff6b6b")
+        UIS->>Theme: 更新 MUI theme 对象
+        Theme->>FE: 全局重渲染 (新主题生效)
+        UIS->>FE: 显示 SystemMessage "Bot 已切换至暗色主题"
+    end

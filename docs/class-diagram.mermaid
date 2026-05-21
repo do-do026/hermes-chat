@@ -1,0 +1,349 @@
+---
+title: Hermes Chat — 类图 (Class Diagram)
+---
+
+%% ============================================
+%% 3.1 共享类型层 (shared/types.ts)
+%% ============================================
+
+classDiagram
+    direction TB
+
+    class MessageType {
+        <<enumeration>>
+        TEXT
+        MARKDOWN
+        GAME
+        PROGRESS
+        SYSTEM
+        UI_MOD
+    }
+
+    class MessageStatus {
+        <<enumeration>>
+        SENDING
+        SENT
+        DELIVERED
+        READ
+        FAILED
+    }
+
+    class Message {
+        +string id
+        +MessageType type
+        +string chatId
+        +string senderId
+        +string content
+        +MessageMetadata metadata
+        +MessageStatus status
+        +number timestamp
+        +number editedAt?
+    }
+
+    class MessageMetadata {
+        +string gameUrl?
+        +number progressValue?
+        +number progressMax?
+        +string progressLabel?
+        +UIModInstruction uiMod?
+        +string replyTo?
+    }
+
+    class UIModInstruction {
+        +UIModType type
+        +string payload
+    }
+
+    class UIModType {
+        <<enumeration>>
+        SET_THEME
+        SET_PRIMARY_COLOR
+        ADD_BUTTON
+        SHOW_MODAL
+        SET_BACKGROUND
+    }
+
+    class Chat {
+        +string id
+        +string title
+        +string botId
+        +string lastMessage?
+        +number unreadCount
+        +number updatedAt
+        +number createdAt
+    }
+
+    class Bot {
+        +string id
+        +string name
+        +string avatarUrl?
+        +string hermesAddress
+        +number hermesPort
+        +string authToken?
+        +BotStatus status
+        +number lastSeen
+    }
+
+    class BotStatus {
+        <<enumeration>>
+        ONLINE
+        OFFLINE
+        CONNECTING
+        ERROR
+    }
+
+    class Task {
+        +string id
+        +string botId
+        +string name
+        +string cronExpression
+        +string action
+        +TaskStatus status
+        +number lastRun?
+        +number nextRun?
+    }
+
+    class TaskStatus {
+        <<enumeration>>
+        ACTIVE
+        PAUSED
+        COMPLETED
+        ERROR
+    }
+
+    class User {
+        +string id
+        +string name
+        +string avatarUrl?
+        +UserSettings settings
+    }
+
+    class UserSettings {
+        +string theme
+        +string primaryColor
+        +boolean notifications
+        +string language
+    }
+
+    Message --> MessageType
+    Message --> MessageStatus
+    Message --> MessageMetadata
+    MessageMetadata --> UIModInstruction
+    UIModInstruction --> UIModType
+    Chat --> Bot
+    Bot --> BotStatus
+    Task --> TaskStatus
+    Task --> Bot
+    User --> UserSettings
+
+
+%% ============================================
+%% 3.2 前端核心接口
+%% ============================================
+
+classDiagram
+    direction TB
+
+    class ChatStore {
+        +Chat[] chats
+        +Message[] messages
+        +string activeChatId
+        +boolean isLoading
+        +addMessage(msg: Message): void
+        +updateMessage(id: string, partial: Partial~Message~): void
+        +setActiveChat(chatId: string): void
+        +markAsRead(chatId: string): void
+        +addChat(chat: Chat): void
+        +loadHistory(chatId: string): Promise~void~
+        +sendMessage(content: string, type: MessageType): void
+    }
+
+    class BotStore {
+        +Bot[] bots
+        +Bot activeBot?
+        +addBot(bot: Bot): void
+        +removeBot(id: string): void
+        +updateBotStatus(id: string, status: BotStatus): void
+        +connectBot(id: string): Promise~void~
+    }
+
+    class UIStore {
+        +string theme
+        +string primaryColor
+        +boolean isMobile
+        +boolean sidebarOpen
+        +Map~string, Component~ injectedComponents
+        +setTheme(theme: string): void
+        +setPrimaryColor(color: string): void
+        +applyUIMod(mod: UIModInstruction): void
+        +resetUI(): void
+        +toggleSidebar(): void
+    }
+
+    class SocketService {
+        +Socket socket
+        +boolean connected
+        +connect(token: string): void
+        +disconnect(): void
+        +joinChat(chatId: string): void
+        +leaveChat(chatId: string): void
+        +emitMessage(msg: Message): void
+        +onMessage(handler: fn): void
+        +onGameResult(handler: fn): void
+        +onProgress(handler: fn): void
+        +onUIMod(handler: fn): void
+    }
+
+    class ApiService {
+        +getBots(): Promise~Bot[]~
+        +getChats(): Promise~Chat[]~
+        +getMessages(chatId: string, page: number): Promise~Message[]~
+        +updateSettings(settings: UserSettings): Promise~void~
+        +createBot(config: BotConfig): Promise~Bot~
+        +createTask(task: TaskConfig): Promise~Task~
+    }
+
+    class GameBridge {
+        +HTMLIFrameElement iframe
+        +string gameUrl
+        +mount(container: HTMLElement, url: string): void
+        +sendToGame(action: string, payload: any): void
+        +onGameEvent(handler: fn): void
+        +destroy(): void
+    }
+
+    class MessageRenderer {
+        +render(message: Message): ReactNode
+        -renderText(msg: Message): ReactNode
+        -renderMarkdown(msg: Message): ReactNode
+        -renderGame(msg: Message): ReactNode
+        -renderProgress(msg: Message): ReactNode
+        -renderSystem(msg: Message): ReactNode
+    }
+
+    class GameSandbox {
+        +string srcUrl
+        +string sandboxFlags
+        +onGameResult(result: any): void
+        +validateUrl(url: string): boolean
+    }
+
+    ChatStore ..> SocketService : uses
+    ChatStore ..> ApiService : uses
+    UIStore --> GameBridge : manages
+    BotStore ..> ApiService : uses
+    MessageRenderer --> GameSandbox : renders
+    SocketService ..> UIStore : updates
+
+
+%% ============================================
+%% 3.3 后端核心接口
+%% ============================================
+
+classDiagram
+    direction TB
+
+    class WebSocketManager {
+        +Server io
+        +Map~string, Socket~ clients
+        +initialize(httpServer: Server): void
+        +handleConnection(socket: Socket): void
+        +joinRoom(socket: Socket, chatId: string): void
+        +leaveRoom(socket: Socket, chatId: string): void
+        +broadcastToChat(chatId: string, event: string, data: any): void
+        +sendToUser(userId: string, event: string, data: any): void
+        +getOnlineUsers(): string[]
+    }
+
+    class HermesConnector {
+        +Map~string, HermesConnection~ connections
+        +connect(botId: string, address: string, port: number, token: string): Promise~void~
+        +disconnect(botId: string): void
+        +sendMessage(botId: string, message: Message): void
+        +onMessage(botId: string, handler: fn): void
+        +reconnect(botId: string): Promise~void~
+        +healthCheck(botId: string): boolean
+    }
+
+    class HermesConnection {
+        +string botId
+        +WebSocket ws
+        +Client sshClient
+        +ConnectionStatus status
+        +number lastHeartbeat
+        +connect(): Promise~void~
+        +close(): void
+        +send(data: any): void
+    }
+
+    class MessageRouter {
+        +routeFromHermes(botId: string, rawMsg: any): Message
+        +routeFromFrontend(msg: Message): void
+        +transformMessage(raw: any): Message
+        +validateMessage(msg: Message): boolean
+        +persistMessage(msg: Message): void
+    }
+
+    class SSHTunnel {
+        +Client ssh2Client
+        +establish(config: SSHConfig): Promise~void~
+        +createForward(localPort: number, remoteHost: string, remotePort: number): void
+        +sendSecureData(data: any): Promise~void~
+        +close(): void
+        +isActive(): boolean
+    }
+
+    class CronScheduler {
+        +Map~string, ScheduledTask~ tasks
+        +register(task: Task): void
+        +unregister(taskId: string): void
+        +pause(taskId: string): void
+        +resume(taskId: string): void
+        +getNextRun(taskId: string): number
+        +listAll(): ScheduledTask[]
+    }
+
+    class ScheduledTask {
+        +Task task
+        +CronJob job
+        +start(): void
+        +stop(): void
+        +execute(): Promise~void~
+    }
+
+    class Database {
+        +Database db
+        +initialize(): void
+        +getMessages(chatId: string, limit: number, offset: number): Message[]
+        +saveMessage(msg: Message): void
+        +getChats(userId: string): Chat[]
+        +saveChat(chat: Chat): void
+        +getBots(): Bot[]
+        +saveBot(bot: Bot): void
+        +getTasks(botId: string): Task[]
+        +saveTask(task: Task): void
+    }
+
+    class Routes {
+        +Router botsRouter
+        +Router messagesRouter
+        +Router configRouter
+        +Router tasksRouter
+        +register(app: Express): void
+    }
+
+    class AuthMiddleware {
+        +authenticate(req, res, next): void
+        +validateToken(token: string): boolean
+        +extractUserId(req): string
+    }
+
+    WebSocketManager --> MessageRouter : forwards
+    HermesConnector --> HermesConnection : manages
+    HermesConnector --> SSHTunnel : uses
+    MessageRouter --> Database : persists
+    MessageRouter --> WebSocketManager : broadcasts
+    CronScheduler --> ScheduledTask : manages
+    CronScheduler --> HermesConnector : triggers
+    Routes --> AuthMiddleware : uses
+    Routes --> Database : uses
