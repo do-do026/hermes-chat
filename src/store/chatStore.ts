@@ -75,11 +75,28 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   addMessage: (message: Message): void => {
     set((state) => {
-      const chatMessages = state.messages[message.chatId] ?? [];
-      // Avoid inserting duplicate messages
+      let chatMessages = state.messages[message.chatId] ?? [];
+
+      // Avoid inserting duplicate messages by ID
       if (chatMessages.some((m) => m.id === message.id)) {
         return state;
       }
+
+      // Smart cleanup: when a real (non-temp) message arrives, remove any
+      // optimistic temp messages that match the same sender + content + chat.
+      // This prevents the "duplicate key" race condition where both the
+      // optimistic temp and the Socket.IO broadcast coexist briefly.
+      if (!message.id.startsWith('temp-')) {
+        chatMessages = chatMessages.filter(
+          (m) =>
+            !(
+              m.id.startsWith('temp-') &&
+              m.senderId === message.senderId &&
+              m.content === message.content
+            ),
+        );
+      }
+
       return {
         messages: {
           ...state.messages,
