@@ -42,6 +42,7 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const defaultHeaders: Record<string, string> = {
     'Content-Type': 'application/json',
+    'x-api-key': 'hermes-chat-dev-key',
   };
 
   const res = await fetch(url, {

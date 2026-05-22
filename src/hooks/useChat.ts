@@ -42,6 +42,7 @@ export function useChat(): UseChatReturn {
   const error = useChatStore((s) => s.error);
   const addMessage = useChatStore((s) => s.addMessage);
   const updateMessage = useChatStore((s) => s.updateMessage);
+  const removeMessage = useChatStore((s) => s.removeMessage);
   const setActiveChat = useChatStore((s) => s.setActiveChat);
   const setMessages = useChatStore((s) => s.setMessages);
   const appendMessages = useChatStore((s) => s.appendMessages);
@@ -65,10 +66,11 @@ export function useChat(): UseChatReturn {
       if (!activeChatId || !text.trim()) return;
 
       const messageType = type ?? MT.TEXT;
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
       // Build an optimistic message
       const optimistic: Message = {
-        id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        id: tempId,
         type: messageType,
         chatId: activeChatId,
         senderId: 'user',
@@ -78,31 +80,33 @@ export function useChat(): UseChatReturn {
         timestamp: Date.now(),
       };
 
-      // Optimistic add
+      // Optimistic add — appears in UI immediately
       addMessage(optimistic);
 
       try {
-        const sent = await api.sendMessage({
+        // REST API: server saves to DB AND broadcasts via Socket.IO.
+        // The real message arrives through useSocket.onMessage → addMessage(realMsg).
+        // We just need to clean up the optimistic temp after success.
+        await api.sendMessage({
           chatId: activeChatId,
           content: text.trim(),
           type: messageType,
         });
 
-        // Replace optimistic with server-confirmed message
-        updateMessage(optimistic.id, activeChatId, sent);
-
-        // Emit via socket for real-time delivery
-        socketService.emitMessage({ ...optimistic, id: sent.id, status: MessageStatus.SENT });
+        // Remove the optimistic temp. The real message (same content) already
+        // arrived via Socket.IO broadcast or will arrive momentarily.
+        removeMessage(tempId, activeChatId);
       } catch (err) {
         const msg =
           err instanceof Error ? err.message : 'Failed to send message';
-        updateMessage(optimistic.id, activeChatId, {
+        // Keep the optimistic message but mark it as failed so user sees feedback
+        updateMessage(tempId, activeChatId, {
           status: MessageStatus.FAILED,
         });
         setError(msg);
       }
     },
-    [activeChatId, addMessage, updateMessage, setError],
+    [activeChatId, addMessage, updateMessage, removeMessage, setError],
   );
 
   /** Load paginated message history for a chat. */

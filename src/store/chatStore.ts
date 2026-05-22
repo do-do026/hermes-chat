@@ -49,6 +49,8 @@ export interface ChatState {
   setLoading: (loading: boolean) => void;
   /** Set or clear the error message. */
   setError: (error: string | null) => void;
+  /** Remove a single message by id from a specific chat. */
+  removeMessage: (id: string, chatId: string) => void;
   /** Look up a chat by its id. Returns undefined if not found. */
   getChatById: (id: string) => Chat | undefined;
 }
@@ -175,6 +177,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   setError: (error: string | null): void => {
     set({ error });
+  },
+
+  removeMessage: (id: string, chatId: string): void => {
+    set((state) => {
+      const chatMessages = state.messages[chatId];
+      if (!chatMessages) return state;
+      return {
+        messages: {
+          ...state.messages,
+          [chatId]: chatMessages.filter((m) => m.id !== id),
+        },
+      };
+    });
   },
 
   getChatById: (id: string): Chat | undefined => {
